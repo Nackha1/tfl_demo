@@ -1,5 +1,5 @@
 function [X, labels] = build_dataset(Fs, T, n_traces, ring_frac, f0, A_ring, dur_range, SNR_dB)
-% BUILD_DATASET  Synthetic normals + optional ringing bursts
+% BUILD_DATASET  Synthetic normals + ringing bursts
 M = round(Fs*T);
 t = (0:M-1)'/Fs;
 

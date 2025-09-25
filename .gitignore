@@ -38,3 +38,6 @@ codegen/
 # SimBiology backup files
 *.sbproj.backup
 *.sbproj.bak
+
+# figs folder
+figs/

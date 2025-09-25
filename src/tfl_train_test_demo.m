@@ -10,11 +10,9 @@ function tfl_train_test_demo
 %   - MATLAB R2019b+ recommended
 %   - Global Optimization Toolbox (simulannealbnd)
 %   - Breach toolbox on MATLAB path (BreachTraceSystem, STL_Formula, ...)
-%
-% Author: <your name>, <date>
 
 %% 0) Setup & config
-clear; close all; rng(26092025);
+rng(128);
 
 % Sampling
 Fs   = 200;                       % Hz
@@ -29,17 +27,24 @@ ring_frac      = 0.05;            % fraction with injected ringing
 f0_sim         = 10;              % ringing freq used in SIMULATION (unknown to learner)
 train_ratio    = 0.8;             % 80/20 train/test split (stratified)
 safe_bands     = [0.0 1.0];       % rows [fmin fmax] defining NORMAL energy bands
-A_ring         = 0.10;            % ringing amplitude
+A_ring         = 0.25;            % ringing amplitude
 dur_ring_range = [0.8 2.0];       % s
 SNR_dB         = 15;              % baseline SNR for normals
 
 % STFT (choose longer window for sub-1 Hz structure)
-win_len  = round(8*Fs);           % samples (~8s)
-noverlap = round(0.9*win_len);    % 90% overlap
+win_len  = round(4*Fs);
+noverlap = round(0.9*win_len);
 nfft     = 2^nextpow2(win_len);
 
 % Aggregation across out-of-safe freqs
 agg_mode = 'mean';                % 'mean' or 'max'
+
+% Figure saver: create figs/<yyyy-MM-dd_HHmmss>/ and reset counter
+run_id  = string(datetime('now'), 'yyyy-MM-dd_HHmmss');
+run_dir = fullfile('figs', run_id);
+savefig_seq('init', run_dir);
+fprintf('Saving figures to: %s\n', run_dir);
+
 
 %% 1) Build the dataset (X, labels)
 [X, labels] = build_dataset(Fs, T, n_traces, ring_frac, f0_sim, A_ring, dur_ring_range, SNR_dB);
@@ -57,8 +62,31 @@ for i = 1:numel(picks)
     title(sprintf('Trace %d (%s)', k, tern(labels(k)==0,'normal','ringing')));
     xlabel('t [s]'); ylabel('x(t)');
 end
+savefig_seq('save', gcf, 'sample_time_series');
 
-%% 4) Breach traces and STL formula
+%% 4) STFT transform energy plots
+figure('Name','STFT power + z_{out}(t)');
+tiledlayout(numel(picks),2,'Padding','compact','TileSpacing','compact');
+for i = 1:numel(picks)
+    k = picks(i);
+
+    [S,F,Tstft] = spectrogram(X(:,k), win_len, noverlap, nfft, Fs, 'yaxis');
+    P = abs(S).^2;
+
+    keep = F <= fmax;
+    F    = F(keep);
+    P    = P(keep,:);
+
+    nexttile; imagesc(Tstft, F, 10*log10(P+eps)); axis xy; colorbar;
+    ylim([0 fmax]);    % show only up to cutoff
+    hold on; yline(safe_bands,'w--'); hold off;
+    xlabel('t [s]'); ylabel('f [Hz]'); title(sprintf('Trace %d STFT (dB)', k));
+    nexttile; plot(t, Z(:,k)); grid on; xlabel('t [s]'); ylabel('z_{out}(t)');
+    title(sprintf('Trace %d out-of-safe energy', k));
+end
+savefig_seq('save', gcf, 'stft_and_zout_examples');
+
+%% 5) Breach traces and STL formula
 if ~exist('BreachTraceSystem','class')
     error('Breach not found. Add Breach to the MATLAB path before running.');
 end
@@ -68,36 +96,37 @@ phi_str = 'alw_[0,T] ( zout[t] <= th )';
 phi     = STL_Formula('phi', phi_str);
 phi     = set_params(phi, {'T'}, T);
 
-%% 5) Stratified train/test split (train on ALL training traces)
+%% 6) Stratified train/test split (train on ALL training traces)
 [idx_train, idx_test] = split_train_test(labels, train_ratio);
 Br_train = br_subset_from_idx(TR, {'x','zout'}, idx_train);
 Br_test  = br_subset_from_idx(TR, {'x','zout'}, idx_test);
 
 ytrue_train = 1 - labels(idx_train);   % 1=normal, 0=ringing
-ytrue_test  = 1 - labels(idx_test);
 
 % Data-driven prior interval for theta from TRAIN set
 th_lo = min(Z(:,idx_train), [], 'all');
 th_hi = max(Z(:,idx_train), [], 'all');
 theta0 = 0.5*(th_lo+th_hi);
 
-%% 6) Simulated annealing (Global Opt. Toolbox) over theta to MINIMIZE training MCR
+%% 7) Simulated annealing (Global Opt. Toolbox) over theta to MINIMIZE training MCR
 sa_obj  = @(theta) mcr_on_split(Br_train, phi, theta, ytrue_train);
 opts_sa = optimoptions('simulannealbnd', ...
     'Display', 'iter', ...
     'InitialTemperature', 100.0, ...
-    'MaxIterations', 50, ...
+    'MaxIterations', 16, ...
     'PlotFcn', {@saplotbestf, @saplotf, @saplottemperature});
 
 [theta_star, mcr_train_best, exitflag, output] = simulannealbnd(sa_obj, theta0, th_lo, th_hi, opts_sa);
 fprintf('TRAIN SA: theta* = %.6g | MCR_train = %.4f | prior box = [%.6g, %.6g] | exitflag=%d, iters=%d\n', ...
     theta_star, mcr_train_best, th_lo, th_hi, exitflag, output.iterations);
 
-%% 7) Final evaluation on TEST set
+%% 8) Final evaluation on TEST set
 Br_test.SetParamSpec('th', theta_star);
 rob_test   = Br_test.CheckSpec(phi);
-yhat_test  = double(rob_test>=0);
-C          = confusionmat(1 - labels(idx_test), yhat_test); % [TN FP; FN TP]
+yhat_test  = double(rob_test>=0);       % 1=normal, 0=ringing
+ytrue_test  = 1 - labels(idx_test);     % 1=normal, 0=ringing
+
+C = confusionmat(ytrue_test, yhat_test);
 TN = C(1,1); FP = C(1,2); FN = C(2,1); TP = C(2,2);
 N  = sum(C,'all');
 
@@ -114,7 +143,7 @@ fprintf('Actual 1        %6d        %6d\n', FN, TP);
 fprintf('acc=%.3f  mcr=%.3f  prec=%.3f  tpr=%.3f  fpr=%.3f  | n_test=%d\n\n', ...
     acc, mcr, prec, tpr, fpr, N);
 
-%% 8) Full-dataset overview with final theta*
+%% 9) Full-dataset overview with final theta*
 Br_eval = Br.copy();
 Br_eval.SetParamSpec('th', theta_star);
 rob_total   = Br_eval.CheckSpec(phi);
@@ -137,6 +166,7 @@ if ~isempty(exN) && ~isempty(exR)
     subplot(2,2,2); plot(t, X(:,exR)); grid on; title('x(t): ringing'); xlabel('t [s]');
     subplot(2,2,4); plot(t, Z(:,exR)); hold on; yline(theta_star,'r--','\theta^*'); grid on;
     title('z_{out}(t): ringing'); xlabel('t [s]');
+    savefig_seq('save', gcf, 'example_normal_vs_ringing');
 end
 
 figure('Name','ALL x(t): misclassified highlighted','Color','w');
@@ -148,6 +178,7 @@ end
 xlabel('t [s]'); ylabel('x(t)');
 title(sprintf('All traces x(t), Misclassified: %d / %d', n_mis, size(X,2)));
 legend({'correct','misclassified'}, 'Location','northwest');
+savefig_seq('save', gcf, 'all_x_misclassified');
 
 figure('Name','ALL z_{out}(t): misclassified highlighted','Color','w');
 plot(t, Z(:,corr_idx), 'Color', [0.8 0.8 0.8]); hold on; grid on;
@@ -159,6 +190,7 @@ yline(theta_star, '--', '\theta^*', 'LineWidth', 1.4);
 xlabel('t [s]'); ylabel('z_{out}(t)');
 title(sprintf('All traces z_{out}(t) — Misclassified: %d / %d', n_mis, size(Z,2)));
 legend({'correct','misclassified','\theta^*'}, 'Location','northwest');
+savefig_seq('save', gcf, 'all_zout_misclassified');
 
 figure('Name','Robustness per trace','Color','w');
 scatter(1:size(Z,2), rob_total, 18, (ytrue_total==1), 'filled'); hold on; grid on;
@@ -167,5 +199,6 @@ yline(0, 'k--');
 xlabel('trace id'); ylabel('robustness r_\phi');
 title('Robustness by trace  (color: normal=1 / ringing=0; red circle = misclassified)');
 colormap([0.85 0.33 0.10; 0 0.45 0.74]); colorbar('Ticks',[0 1],'TickLabels',{'ringing','normal'});
+savefig_seq('save', gcf, 'robustness_by_trace');
 
 end
