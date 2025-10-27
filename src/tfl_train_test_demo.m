@@ -13,6 +13,7 @@ function tfl_train_test_demo
 
 %% 0) Setup & config
 rng(128);
+% rng(10);
 
 % Sampling
 Fs   = 200;                       % Hz
@@ -22,14 +23,14 @@ t    = (0:M-1)'/Fs;
 fmax = 15;                        % Hz cutoff for TF plots/aggregation
 
 % Dataset
-n_traces       = 512;             % number of traces
+n_traces       = 128;             % number of traces
 ring_frac      = 0.05;            % fraction with injected ringing
-f0_sim         = 1.25;              % ringing freq used in SIMULATION (unknown to learner)
+f0_sim         = 2;            % ringing freq used in SIMULATION (unknown to learner)
 train_ratio    = 0.8;             % 80/20 train/test split (stratified)
-safe_bands     = [0.0 1.0];       % rows [fmin fmax] defining NORMAL energy bands
-A_ring         = 0.10;            % ringing amplitude
+safe_bands     = [0.9 0.9];       % rows [fmin fmax] defining NORMAL energy bands
+A_ring         = 0.4;            % ringing amplitude
 dur_ring_range = [0.8 2.0];       % s
-SNR_dB         = 15;              % baseline SNR for normals
+SNR_dB         = 30;              % baseline SNR for normals
 
 % STFT (choose longer window for sub-1 Hz structure)
 win_len  = round(4*Fs);
@@ -37,7 +38,7 @@ noverlap = round(0.9*win_len);
 nfft     = 2^nextpow2(win_len);
 
 % Aggregation across out-of-safe freqs
-agg_mode = 'mean';                % 'mean' or 'max'
+agg_mode = 'sum';
 
 % Simulated Annealing
 init_temp = 100.0;
@@ -54,7 +55,8 @@ fprintf('Saving figures to: %s\n', run_dir);
 [X, labels] = build_dataset(Fs, T, n_traces, ring_frac, f0_sim, A_ring, dur_ring_range, SNR_dB);
 
 %% 2) Compute z_out(t) via STFT
-Z = compute_zout_from_stft(X, Fs, win_len, noverlap, nfft, safe_bands, fmax, agg_mode);
+% Z = compute_zout_from_stft(X, Fs, win_len, noverlap, nfft, safe_bands, fmax, agg_mode);
+Z = compute_zout_from_cwt(X, Fs, safe_bands, fmax, agg_mode);
 
 %% 3) Quick sample plots
 pick_norm = find(labels==0, 2, 'first');
@@ -74,17 +76,37 @@ tiledlayout(numel(picks),2,'Padding','compact','TileSpacing','compact');
 for i = 1:numel(picks)
     k = picks(i);
 
-    [S,F,Tstft] = spectrogram(X(:,k), win_len, noverlap, nfft, Fs, 'yaxis');
-    P = abs(S).^2;
+    % [S,F,Tstft] = spectrogram(X(:,k), win_len, noverlap, nfft, Fs, 'yaxis');
 
-    keep = F <= fmax;
-    F    = F(keep);
-    P    = P(keep,:);
+    fb = cwtfilterbank(SignalLength=M, SamplingFrequency=Fs);
+    [S,F,coi] = cwt(X(:,k), FilterBank=fb);
+    P = abs(S);
+    % P = abs(S);
 
-    nexttile; imagesc(Tstft, F, 10*log10(P+eps)); axis xy; colorbar;
-    ylim([0 fmax]);    % show only up to cutoff
-    hold on; yline(safe_bands,'w--'); hold off;
-    xlabel('t [s]'); ylabel('f [Hz]'); title(sprintf('Trace %d STFT (dB)', k));
+    % keep = F <= fmax;
+    % F    = F(keep);
+    % P    = P(keep,:);
+
+    nexttile;
+    % imagesc(Tstft, F, 10*log10(P+eps));
+    surf(t, F, P);
+    % surf(Tstft, F, P);
+    % contour(t,F,P);
+    set(gca,'YScale','log'); % log-frequency
+    shading interp;
+    view(0, 90);
+    axis tight;
+    colorbar;
+
+    hold on;
+    yline(safe_bands,'w--');
+    z_coi = interp2(t, F, P, t, coi, 'linear', 0);
+    plot3(t, coi, z_coi, 'r--', 'LineWidth', 2);
+    hold off;
+
+    xlabel('t [s]')
+    ylabel('f [Hz]');
+    title(sprintf('Trace %d STFT (dB)', k));
     nexttile; plot(t, Z(:,k)); grid on; xlabel('t [s]'); ylabel('z_{out}(t)');
     title(sprintf('Trace %d out-of-safe energy', k));
 end
@@ -201,13 +223,21 @@ savefig_seq('save', gcf, 'all_x_misclassified');
 
 figure('Name','ALL z_{out}(t): misclassified highlighted','Color','w'); hold on; grid on;
 h_corr = plot(t, Z(:,corr_idx), 'Color', [0.7 0.7 0.7]);
-h_mis = plot(t, Z(:,mis_idx), 'Color', 'r', 'LineWidth', 1.2);
+if ~isempty(mis_idx)
+    h_mis = plot(t, Z(:,mis_idx), 'Color', 'r', 'LineWidth', 1.2);
+end
 h_thr = yline(theta_star, '--k', '\theta^*', 'LineWidth', 1.4);
 xlabel('t [s]'); ylabel('z_{out}(t)');
 title(sprintf('All traces z_{out}(t) — Misclassified: %d / %d', n_mis, size(Z,2)));
-legend([h_corr(1), h_mis(1), h_thr], ...
+if isempty(mis_idx)
+    legend([h_corr(1), h_thr], ...
        {'correct','misclassified','\theta^*'}, ...
        'Location','northwest');
+else
+    legend([h_corr(1), h_mis(1), h_thr], ...
+       {'correct','misclassified','\theta^*'}, ...
+       'Location','northwest');
+end
 savefig_seq('save', gcf, 'all_zout_misclassified');
 
 % OLD PLOTTING FUNCTION

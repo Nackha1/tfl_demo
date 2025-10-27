@@ -20,7 +20,6 @@ for k = 1:n_traces
     out_mask = ~in_safe;
 
     switch lower(agg_mode)
-        case 'max',  z = max(P(out_mask, :), [], 1);
         case 'mean', z = mean(P(out_mask, :), 1);
         otherwise, error('Unknown agg_mode: %s', agg_mode);
     end
