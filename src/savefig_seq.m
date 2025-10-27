@@ -21,7 +21,8 @@ switch lower(action)
         fig  = arg1;
         base = char(arg2);
         if isempty(OUTDIR) || isempty(IDX)
-            error('savefig_seq: Not initialized. Call savefig_seq(''init'', outdir) first.');
+            % error('savefig_seq: Not initialized. Call savefig_seq(''init'', outdir) first.');
+            return
         end
         safe = regexprep(base, '\s+', '_');
         fname = sprintf('%02d_%s.png', IDX, safe);

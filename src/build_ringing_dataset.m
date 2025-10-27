@@ -1,4 +1,4 @@
-function [X, labels] = build_dataset(Fs, T, n_traces, ring_frac, f0, A_ring, dur_range, SNR_dB)
+function [X, labels] = build_ringing_dataset(Fs, T, n_traces, ring_frac, f0, A_ring, dur_range)
 % BUILD_DATASET  Synthetic normals + ringing bursts
 M = round(Fs*T);
 t = (0:M-1)'/Fs;
@@ -8,11 +8,7 @@ labels = zeros(1, n_traces); % 0=normal, 1=ringing
 
 % base normals
 for k = 1:n_traces
-    base  = 0.5*sin(2*pi*0.4*t + 2*pi*rand) + 0.2*sin(2*pi*0.9*t + 2*pi*rand);
-    noise = randn(size(t));
-    noise = noise/std(noise);
-    sigma = rms(base)/db2mag(SNR_dB);
-    X(:,k) = base + sigma*noise;
+    X(:,k) = 0.5*sin(2*pi*0.4*t + 2*pi*rand) + 0.2*sin(2*pi*0.9*t + 2*pi*rand);
 end
 
 % pick ringing traces

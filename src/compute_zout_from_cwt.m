@@ -29,7 +29,7 @@ function Z = compute_zout_from_cwt(X, Fs, safe_bands, fmax, agg_mode)
         % --- Ignore frequencies inside the cone of influence
         for t_idx = 1:length(coi)
             inside_coi = F < coi(t_idx);  % frequencies below the limit are unreliable
-            P(inside_coi, t_idx) = NaN;
+            % P(inside_coi, t_idx) = NaN;
         end
 
         % plot(t,coi);
@@ -49,6 +49,11 @@ function Z = compute_zout_from_cwt(X, Fs, safe_bands, fmax, agg_mode)
                 z = mean(P(out_mask, :), 1, 'omitmissing');
             case 'sum'
                 z = sum(P(out_mask, :), 1, 'omitmissing');
+            case 'max_f'
+                % z = max(P(out_mask, :), [], 1, 'omitmissing');
+                % Find the frequency with maximum amplitude at each time
+                [~, idx_max] = max(P(out_mask, :), [], 1, 'omitmissing');
+                z = F(idx_max);
             otherwise
                 error('Unknown agg_mode: %s', agg_mode);
         end
